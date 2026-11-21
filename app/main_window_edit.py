@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import QListWidgetItem, QMessageBox
 
 from .config import FONTS, font_label
-from .models import TextBlock, TextLine
+from .models import TextBlock, TextLine, merge_blocks, renumber_page_blocks
 
 class WindowEditMixin:
     def on_page_selected(self, row: int) -> None:
@@ -349,6 +350,104 @@ class WindowEditMixin:
             return
         if not self.current_line.translated.strip():
             QTimer.singleShot(0, self.translate_line)
+
+    # ---------- Объединение блоков ----------
+
+    def merge_selected_blocks(self) -> None:
+        """Склеивает выделенные блоки текущей страницы в один абзац.
+
+        Выделение — в списке «Блоки на странице» (Ctrl/Shift+клик) или на
+        листе (Ctrl+клик по блокам). Первый (верхний) блок остаётся,
+        остальные поглощаются: строки дописываются, тексты склеиваются,
+        рамка становится общей. Сохранённый перевод строк сохраняется;
+        блочный перевод сбрасывается (текст изменился).
+        """
+        self._commit_text_edit()
+        if not self.pages:
+            return
+        page = self.pages[self.current_page]
+        rows = sorted({i.row() for i in self.block_list.selectedIndexes()})
+        # если в списке ничего не выбрано — берём выделение с листа
+        if len(rows) < 2:
+            canvas_bi = self.page_view.selected_block_indices()
+            rows = []
+            for i, blk in enumerate(page.blocks):
+                if blk.block_index in canvas_bi:
+                    rows.append(i)
+        blocks = [page.blocks[r] for r in rows if 0 <= r < len(page.blocks)]
+        if len(blocks) < 2:
+            QMessageBox.information(
+                self, "Объединение блоков",
+                "Выделите два или более блока (Ctrl/Shift+клик в списке "
+                "«Блоки на странице» или Ctrl+клик на листе), затем "
+                "повторите действие (Ctrl+M)."
+            )
+            return
+        # первый блок списка — самый верхний на странице
+        blocks.sort(key=lambda b: (b.eff_bbox()[1], b.eff_bbox()[0]))
+        target, absorbed = blocks[0], blocks[1:]
+
+        had_block_translation = bool(target.translated_text.strip()) or any(
+            b.translated_text.strip() for b in absorbed)
+        merge_blocks(target, absorbed)
+
+        for b in absorbed:
+            page.blocks.remove(b)
+        renumber_page_blocks(page)
+
+        self.current_block = target
+        self.current_line = None
+        if had_block_translation:
+            target.translated_text = ""
+        self._populate_blocks()
+        try:
+            row = page.blocks.index(target)
+        except ValueError:
+            row = 0
+        self.block_list.setCurrentRow(row)
+        self.render_current_page()
+        self.status_label.setText(
+            f"Блоки объединены: {len(blocks)} → 1 "
+            f"(новый блок №{row + 1} на странице {self.current_page + 1}). "
+            "Проверьте текст и при необходимости переведите блок заново."
+        )
+
+    def on_canvas_block_context_menu(self, block_index: int, scene_pos) -> None:
+        """Контекстное меню блока на листе (ПКМ) с пунктом «Объединить»."""
+        from PySide6.QtWidgets import QMenu
+        page = self.pages[self.current_page] if self.pages else None
+        if page is None:
+            return
+        selected = self.page_view.selected_block_indices()
+        if block_index not in selected:
+            selected = [block_index]
+        menu = QMenu(self)
+        act_merge_sel = menu.addAction(
+            f"Объединить выбранные блоки ({len(selected)})…"
+        )
+        act_merge_sel.setEnabled(len(selected) >= 2)
+        prev = next((b for b in page.blocks
+                    if b.block_index == block_index - 1), None)
+        nxt = next((b for b in page.blocks
+                    if b.block_index == block_index + 1), None)
+        act_prev = act_next = None
+        if prev is not None:
+            act_prev = menu.addAction("Объединить с предыдущим блоком")
+        if nxt is not None:
+            act_next = menu.addAction("Объединить со следующим блоком")
+        chosen = menu.exec(self.page_view.mapToGlobal(
+            self.page_view.mapFromScene(scene_pos)))
+        if chosen is None:
+            return
+        if chosen is act_merge_sel:
+            self.page_view.set_blocks_selected(selected)
+            self.merge_selected_blocks()
+        elif chosen is act_prev:
+            self.page_view.set_blocks_selected([block_index - 1, block_index])
+            self.merge_selected_blocks()
+        elif chosen is act_next:
+            self.page_view.set_blocks_selected([block_index, block_index + 1])
+            self.merge_selected_blocks()
 
     def apply_block_geometry(self) -> None:
         block = self.current_block

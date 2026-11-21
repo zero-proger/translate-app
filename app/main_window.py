@@ -65,6 +65,7 @@ _REQUIRED_METHODS = (
     "fit_width", "change_zoom",
     "on_page_selected", "on_block_selected", "on_line_selected",
     "_commit_text_edit", "on_canvas_line_clicked", "on_canvas_line_edited",
+    "merge_selected_blocks", "on_canvas_block_context_menu",
     "_apply_format", "apply_font_only_to_all", "_current_align",
     "_run_translation", "translate_block", "translate_line",
     "stop_translation", "_set_busy",
@@ -158,6 +159,14 @@ class MainWindow(WindowFilesMixin, WindowEditMixin, WindowTranslateMixin, QMainW
                                      triggered=self.go_prev_line)
         self.act_next_line = QAction("Следующая строка", self, shortcut="Alt+Right",
                                      triggered=self.go_next_line)
+        self.act_merge_blocks = QAction("Объединить выбранные блоки", self,
+                                        shortcut="Ctrl+M",
+                                        triggered=self.merge_selected_blocks)
+        self.act_merge_blocks.setToolTip(
+            "Склеивает выделенные блоки текущей страницы в один абзац.\n"
+            "Выделите 2 и более блока (Ctrl/Shift+клик в списке блоков\n"
+            "или на листе), затем выполните это действие."
+        )
 
         mb = self.menuBar()
         fm = mb.addMenu("Файл")
@@ -172,6 +181,8 @@ class MainWindow(WindowFilesMixin, WindowEditMixin, WindowTranslateMixin, QMainW
         em = mb.addMenu("Правка")
         em.addAction(self.act_find_replace)
         em.addAction(self.act_bulk_resize)
+        em.addSeparator()
+        em.addAction(self.act_merge_blocks)
 
         tm = mb.addMenu("Перевод")
         tm.addAction(self.act_translate_all)
@@ -230,6 +241,7 @@ class MainWindow(WindowFilesMixin, WindowEditMixin, WindowTranslateMixin, QMainW
         self.page_view = PageView()
         self.page_view.line_clicked.connect(self.on_canvas_line_clicked)
         self.page_view.line_edited.connect(self.on_canvas_line_edited)
+        self.page_view.block_context_menu.connect(self.on_canvas_block_context_menu)
         self.page_view.viewport().installEventFilter(self)
         cl.addWidget(self.page_view, 1)
 
@@ -501,6 +513,7 @@ class MainWindow(WindowFilesMixin, WindowEditMixin, WindowTranslateMixin, QMainW
         self.block_list = QListWidget()
         self.block_list.setMaximumHeight(120)
         self.block_list.currentRowChanged.connect(self.on_block_selected)
+        self.block_list.setSelectionMode(QListWidget.ExtendedSelection)
         gbl.addWidget(self.block_list)
         nav_b = QHBoxLayout()
         self.prev_block_button = QPushButton("◀ Блок")
@@ -510,6 +523,15 @@ class MainWindow(WindowFilesMixin, WindowEditMixin, WindowTranslateMixin, QMainW
         nav_b.addWidget(self.prev_block_button)
         nav_b.addWidget(self.next_block_button)
         gbl.addLayout(nav_b)
+        self.merge_blocks_button = QPushButton("Объединить выбранные блоки")
+        self.merge_blocks_button.setToolTip(
+            "Склеивает выделенные блоки в один абзац.\n"
+            "Выделите 2 и более блока (Ctrl/Shift+клик здесь или на листе)\n"
+            "и нажмите кнопку, либо используйте Ctrl+M / контекстное меню\n"
+            "на листе (ПКМ по блоку)."
+        )
+        self.merge_blocks_button.clicked.connect(self.merge_selected_blocks)
+        gbl.addWidget(self.merge_blocks_button)
         layout.addWidget(gb)
 
         gl = QGroupBox("Строки в блоке")
