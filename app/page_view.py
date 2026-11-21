@@ -12,7 +12,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QGraphicsItem, QGraphicsPixmapItem, QGraphicsScene, QGraphicsTextItem,
-    QGraphicsView,
+    QGraphicsView, QMenu,
 )
 
 from . import builder
@@ -95,9 +95,19 @@ class EditableLineItem(QGraphicsTextItem):
         self._line_index = line_index
         self._editing = False
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
+        # множественное выделение блоков — зажать Ctrl и кликать по блокам
+        self.setFlag(QGraphicsItem.ItemIsFocusable, True)
         self.setZValue(10)
         self.setTextInteractionFlags(Qt.NoTextInteraction)
         self.setAcceptHoverEvents(True)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_context_menu)
+
+    def _on_context_menu(self, pos) -> None:
+        """ПКМ по блоку на листе: меню «Объединить блоки»."""
+        if self._editing:
+            return
+        self._view.block_context_menu.emit(self._block.block_index, self.mapToScene(pos))
 
     @property
     def line(self) -> Optional[TextLine]:
@@ -270,6 +280,8 @@ class EditableLineItem(QGraphicsTextItem):
 class PageView(QGraphicsView):
     line_clicked = Signal(int, int)
     line_edited = Signal(int, int, str)
+    # ПКМ по блоку на листе: (block_index, позиция в координатах сцены)
+    block_context_menu = Signal(int, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -281,6 +293,7 @@ class PageView(QGraphicsView):
         self.setDragMode(QGraphicsView.NoDrag)
 
         self._scene = QGraphicsScene(self)
+        self._scene.setSelectionMode(QGraphicsScene.ExtendedSelection)
         self.setScene(self._scene)
 
         self._src_doc: Optional[fitz.Document] = None
@@ -397,3 +410,17 @@ class PageView(QGraphicsView):
                 self.ensureVisible(item)
             else:
                 item.setSelected(False)
+
+    def selected_block_indices(self) -> list:
+        """Индексы блоков, выделенные на листе (Ctrl+клик для нескольких)."""
+        result = set()
+        for item in self._scene.selectedItems():
+            if isinstance(item, EditableLineItem):
+                result.add(item._block.block_index)
+        return sorted(result)
+
+    def set_blocks_selected(self, block_indices) -> None:
+        """Выделяет на листе все элементы указанных блоков."""
+        wanted = set(block_indices)
+        for (bi, _), item in self._items.items():
+            item.setSelected(bi in wanted)

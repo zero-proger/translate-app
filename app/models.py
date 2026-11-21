@@ -179,6 +179,96 @@ class TextBlock:
                 issues += 1
         return issues
 
+    def merged_original_text(self) -> str:
+        """Оригинальный текст блока «как единый абзац»: строки склеиваются
+        через пробел (дефис на границе переноса склеивается без пробела)."""
+        parts: List[str] = []
+        for ln in self.lines:
+            t = " ".join(ln.original.split())
+            if t:
+                parts.append(t)
+        if parts:
+            out = parts[0]
+            for p in parts[1:]:
+                if out.endswith("-"):
+                    out += p
+                else:
+                    out += " " + p
+            return out
+        return " ".join(self.original_text.split())
+
+    def merge_style_from(self, other: "TextBlock") -> None:
+        """Наследует оформление другого блока, если у него явных настроек нет."""
+        if self.font_family is None and other.font_family is not None:
+            self.font_family = other.font_family
+        if self.font_size is None and other.font_size is not None:
+            self.font_size = other.font_size
+        if self.bold is None and other.bold is not None:
+            self.bold = other.bold
+        if self.italic is None and other.italic is not None:
+            self.italic = other.italic
+        if self.line_spacing is None and other.line_spacing is not None:
+            self.line_spacing = other.line_spacing
+        if self.align is None and other.align is not None:
+            self.align = other.align
+        if self.style_name is None and other.style_name:
+            self.style_name = other.style_name
+        self.auto_fit = self.auto_fit or other.auto_fit
+        self.allow_overflow = self.allow_overflow or other.allow_overflow
+        self.condense_enabled = self.condense_enabled or other.condense_enabled
+        self.min_horizontal_scale = min(self.min_horizontal_scale,
+                                        other.min_horizontal_scale)
+
+    def union_bbox(self, others: List["TextBlock"]) -> BBox:
+        """Объединяющая рамка этого блока и перечисленных других."""
+        boxes = [self.eff_bbox()] + [b.eff_bbox() for b in others]
+        return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+    def renumber_lines(self) -> None:
+        """Пересчитывает line_index строк по фактическому порядку в блоке."""
+        for i, ln in enumerate(self.lines):
+            ln.line_index = i
+            ln.block_index = self.block_index
+
+def renumber_page_blocks(page: "PageData") -> None:
+    """Синхронизирует block_index блоков страницы с позициями в списке.
+
+    Вызывается после объединения/удаления блоков; заодно обновляет
+    page_index/block_index у строк блока.
+    """
+    for i, block in enumerate(page.blocks):
+        block.block_index = i
+        for ln in block.lines:
+            ln.page_index = block.page_index
+            ln.block_index = i
+        block.renumber_lines()
+
+def merge_blocks(target: TextBlock, absorbed: List[TextBlock]) -> TextBlock:
+    """Объединяет блоки в один (target остаётся).
+
+    Строки поглощённых блоков дописываются к строкам target (при их
+    наличии); иначе тексты склеиваются в original_text. Оформление
+    наследуется от первого поглощённого блока, объединяется bbox.
+    Возвращает target.
+    """
+    for src in absorbed:
+        if target.lines or src.lines:
+            target.lines.extend(src.lines)
+            # оригинальный текст держим в соответствии со строками
+            target.original_text = target.merged_original_text()
+        else:
+            t = target.original_text.rstrip()
+            s = src.original_text.strip()
+            if t and s:
+                target.original_text = f"{t} {s}" if not t.endswith("-") else t + s
+            elif s:
+                target.original_text = s
+        target.merge_style_from(src)
+    target.bbox_override = target.union_bbox(absorbed)
+    target.renumber_lines()
+    return target
+
 @dataclass
 class PageData:
     index: int
